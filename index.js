@@ -20,18 +20,28 @@ export default async function pMap(
 		const result = [];
 		const errors = [];
 		const skippedIndexes = [];
-		const iterator = iterable[Symbol.iterator]();
 		let isRejected = false;
 		let isIterableDone = false;
 		let resolvingCount = 0;
 		let currentIndex = 0;
+		let asyncIterator = false;
+		let iterator;
 
-		const next = () => {
+		if (iterable[Symbol.iterator] === undefined) {
+			// We've got an async iterable
+			iterator = iterable[Symbol.asyncIterator]();
+			asyncIterator = true;
+		} else {
+			iterator = iterable[Symbol.iterator]();
+		}
+
+		const next = async () => {
 			if (isRejected) {
 				return;
 			}
 
-			const nextItem = iterator.next();
+			const nextItem = asyncIterator ? await iterator.next() : iterator.next();
+
 			const index = currentIndex;
 			currentIndex++;
 
@@ -55,6 +65,7 @@ export default async function pMap(
 
 			resolvingCount++;
 
+			// Intentionally not awaited
 			(async () => {
 				try {
 					const element = await nextItem.value;
@@ -64,6 +75,7 @@ export default async function pMap(
 					}
 
 					const value = await mapper(element, index);
+
 					if (value === pMapSkip) {
 						skippedIndexes.push(index);
 					} else {
@@ -71,7 +83,7 @@ export default async function pMap(
 					}
 
 					resolvingCount--;
-					next();
+					await next();
 				} catch (error) {
 					if (stopOnError) {
 						isRejected = true;
@@ -79,19 +91,32 @@ export default async function pMap(
 					} else {
 						errors.push(error);
 						resolvingCount--;
-						next();
+						await next();
 					}
 				}
 			})();
 		};
 
-		for (let index = 0; index < concurrency; index++) {
-			next();
+		// Create the concurrent runners in a detached (non-awaited)
+		// promise.  We need this so we can await the next() calls
+		// to stop creating runners before hitting the concurrency limit
+		// if the iterable has already been marked as done.
+		// NOTE: We *must* do this for async iterators otherwise we'll spin up
+		// infinite next() calls by default and never start the event loop.
+		(async () => {
+			for (let index = 0; index < concurrency; index++) {
+				try {
+					// eslint-disable-next-line no-await-in-loop
+					await next();
+				} catch {
+					break;
+				}
 
-			if (isIterableDone) {
-				break;
+				if (isIterableDone) {
+					break;
+				}
 			}
-		}
+		})();
 	});
 }
 
