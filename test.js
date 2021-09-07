@@ -257,3 +257,58 @@ test('asyncIterator - do not run mapping after stop-on-error happened', async t 
 	await delay(500);
 	t.deepEqual(mappedValues, [1, 3, 2]);
 });
+
+//
+// Tests of iterables that throw before any item is yielded
+//
+
+class SyncIterableThrows {
+	constructor(data, throwAfterIndex) {
+		this.data = data;
+		this.throwAfterIndex = throwAfterIndex;
+	}
+
+	* [Symbol.iterator]() {
+		for (let i = 0; i < this.data.length; i++) {
+			yield this.data[i];
+			if (i === this.throwAfterIndex) {
+				throw new Error('SyncIterableThrows');
+			}
+		}
+	}
+}
+
+class AsyncIterableThrows {
+	constructor(data, throwAfterIndex) {
+		this.data = data;
+		this.throwAfterIndex = throwAfterIndex;
+	}
+
+	async * [Symbol.asyncIterator]() {
+		for (let i = 0; i < this.data.length; i++) {
+			yield this.data[i];
+
+			// eslint-disable-next-line no-await-in-loop
+			await delay(10);
+
+			if (i === this.throwAfterIndex) {
+				throw new Error('AsyncIterableThrows');
+			}
+		}
+	}
+}
+
+test('handles iterable throw', async t => {
+	const input = [[1, 10], [2, 10], [3, 10]];
+	await t.throwsAsync(pMap(new SyncIterableThrows(input, 0), mapper, {concurrency: 1}), {message: 'SyncIterableThrows'});
+});
+
+test('asyncIterator - handles iterable throw', async t => {
+	const input = [[1, 10], [2, 10], [3, 10]];
+	await t.throwsAsync(pMap(new AsyncIterableThrows(input, 0), mapper, {concurrency: 1}), {message: 'AsyncIterableThrows'});
+});
+
+// TODO: Add a test for the first item throwing in the mapper and the second
+// item throwing in the iterator - this should lead to an uncaught exception
+// since the next() call in the catch block has no exception handler that will
+// catch the exception from the iterator.

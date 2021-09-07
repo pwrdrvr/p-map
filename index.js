@@ -24,13 +24,13 @@ export default async function pMap(
 		let isIterableDone = false;
 		let resolvingCount = 0;
 		let currentIndex = 0;
-		let asyncIterator = false;
+		let isAsyncIterator = false;
 		let iterator;
 
 		if (iterable[Symbol.iterator] === undefined) {
 			// We've got an async iterable
 			iterator = iterable[Symbol.asyncIterator]();
-			asyncIterator = true;
+			isAsyncIterator = true;
 		} else {
 			iterator = iterable[Symbol.iterator]();
 		}
@@ -40,7 +40,7 @@ export default async function pMap(
 				return;
 			}
 
-			const nextItem = asyncIterator ? await iterator.next() : iterator.next();
+			const nextItem = isAsyncIterator ? await iterator.next() : iterator.next();
 
 			const index = currentIndex;
 			currentIndex++;
@@ -91,6 +91,8 @@ export default async function pMap(
 					} else {
 						errors.push(error);
 						resolvingCount--;
+
+						// FIXME: This has no try/catch block around it
 						await next();
 					}
 				}
@@ -106,9 +108,20 @@ export default async function pMap(
 		(async () => {
 			for (let index = 0; index < concurrency; index++) {
 				try {
+					// Exceptions happen here if .next on the iterable throws
+					// In that case we can't really continue regardless of stopOnError state
+					// We must await this else initial iteration of an async iterable
+					// will loop forever setting up runners for iterable items that do not
+					// actually exist (since concurrency limit is defaulted to Infinity)
+					// Note: for sync iterables this will have no negative impact
 					// eslint-disable-next-line no-await-in-loop
 					await next();
-				} catch {
+				} catch (error) {
+					if (!isRejected) {
+						isRejected = true;
+						reject(error);
+					}
+
 					break;
 				}
 
